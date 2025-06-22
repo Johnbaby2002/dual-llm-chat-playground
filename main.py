@@ -37,7 +37,7 @@ Toggle for local LLM
 
 enable_local = st.sidebar.checkbox("Enable local LLM", value=True)
 
-Budget configuration (€0.10 cap)
+# Budget configuration (€0.10 cap)
 
 TOTAL_BUDGET_CENTS   = 10 COST_PER_TOKEN_CENTS = 0.003 BUDGET_FILE          = "budget.json"
 
