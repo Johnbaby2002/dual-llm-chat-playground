@@ -2,7 +2,6 @@ import os import subprocess import time import json import shutil
 
 import openai import streamlit as st
 
-—————————————————————————————————————————————————————————————————
 
 Page config
 
@@ -15,8 +14,6 @@ oai_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY") openai
 Admin password from secrets
 
 ADMIN_PW = st.secrets.get("ADMIN_PW")
-
-—————————————————————————————————————————————————————————————————
 
 Sidebar settings
 
@@ -51,8 +48,6 @@ if "history" not in st.session_state: st.session_state.history = [] if "budget_u
 Sidebar metric: remaining budget
 
 remaining = max(TOTAL_BUDGET_CENTS - st.session_state.budget_used, 0) st.sidebar.metric("💶 Budget remaining (¢)", f"{remaining:.1f}")
-
-—————————————————————————————————————————————————————————————————
 
 Main title
 
