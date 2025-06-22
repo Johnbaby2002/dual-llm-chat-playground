@@ -10,14 +10,48 @@ import streamlit as st
 # Page config
 st.set_page_config(layout="wide", page_title="Dual-LLM Chat Playground")
 
-# Load your OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Load OpenAI key from env or secrets
+openai.api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
 
 # Admin password from secrets
 ADMIN_PW = st.secrets.get("ADMIN_PW")
 
 # —————————————————————————————————————————————————————————————————
-# Sidebar settings
+# Sidebar controls
+st.sidebar.title("⚙️ Settings")
+
+# Admin unlock panel
+if "admin_unlocked" not in st.session_state:
+    st.session_state.admin_unlocked = False
+
+admin_input = st.sidebar.text_input(
+    "🔒 Admin password", type="password", key="admin_input"
+)
+if st.sidebar.button("🔓 Unlock", key="unlock_btn"):
+    if ADMIN_PW and admin_input == ADMIN_PW:
+        st.session_state.admin_unlocked = True
+        st.sidebar.success("🔓 Admin unlocked")
+    else:
+        st.sidebar.error("❌ Wrong password")
+
+# Clear history & budget (admin only)
+def clear_all():
+    st.session_state.history = []
+    st.session_state.budget_used = 0.0
+    try:
+        os.remove("budget.json")
+    except FileNotFoundError:
+        pass
+
+if st.session_state.admin_unlocked:
+    if st.sidebar.button("🚨 Clear History & Budget", key="clear_btn"):
+        clear_all()
+        st.sidebar.info("🔄 History & budget reset")
+        st.experimental_rerun()
+else:
+    st.sidebar.write("Enter password and click Unlock to reset.")
+
+# Model selection & parameters
 gpt_models    = ["gpt-4o-mini", "gpt-3.5-turbo"]
 local_models  = ["llama3.2"]
 selected_gpt   = st.sidebar.selectbox("Cloud LLM",   gpt_models)
@@ -30,39 +64,10 @@ TOTAL_BUDGET_CENTS   = 10
 COST_PER_TOKEN_CENTS = 0.003
 BUDGET_FILE          = "budget.json"
 
-# Clear logic
-def clear_all():
-    st.session_state.history     = []
-    st.session_state.budget_used = 0.0
-    try:
-        os.remove(BUDGET_FILE)
-    except FileNotFoundError:
-        pass
-
-# — Admin unlock panel —
-if "admin_unlocked" not in st.session_state:
-    st.session_state.admin_unlocked = False
-admin_input = st.sidebar.text_input(
-    "🔒 Admin password", type="password", key="admin_input"
-)
-if st.sidebar.button("🔓 Unlock", key="unlock_btn"):
-    if ADMIN_PW and admin_input == ADMIN_PW:
-        st.session_state.admin_unlocked = True
-        st.sidebar.success("🔓 Admin unlocked")
-    else:
-        st.sidebar.error("❌ Wrong password")
-
-if st.session_state.admin_unlocked:
-    if st.sidebar.button("🚨 Clear History & Budget", key="clear_btn"):
-        clear_all()
-        st.sidebar.info("🔄 History & budget reset")
-        st.experimental_rerun()
-else:
-    st.sidebar.write("Enter password and click Unlock to reset.")
-
-# Initialize session state
+# Initialize session state & load persisted budget
 if "history" not in st.session_state:
     st.session_state.history = []
+
 if "budget_used" not in st.session_state:
     try:
         with open(BUDGET_FILE, "r") as f:
@@ -84,65 +89,71 @@ for msg in st.session_state.history:
     st.chat_message(role).write(msg["content"])
 
 # Chat input
-user_input = st.chat_input("Type your message here...")
-if not user_input:
-    st.stop()
+user_input = st.chat_input("Type your message here…")
 
-# Record & show user message
-st.session_state.history.append({"role": "user", "content": user_input})
-st.chat_message("user").write(user_input)
-col1, col2 = st.columns(2)
+# Only when user_input is provided do we call the LLMs
+if user_input:
+    # Record & display user message
+    st.session_state.history.append({"role": "user", "content": user_input})
+    st.chat_message("user").write(user_input)
 
-# — GPT-4o-mini with full history and budget
-with col1:
-    st.subheader(f"💬 {selected_gpt}")
-    if st.session_state.budget_used < TOTAL_BUDGET_CENTS:
-        gpt_msgs = [
-            {"role": m["role"], "content": m["content"]}
+    col1, col2 = st.columns(2)
+
+    # — GPT-4o-mini response (full history + budget)
+    with col1:
+        st.subheader(f"💬 {selected_gpt}")
+        if st.session_state.budget_used < TOTAL_BUDGET_CENTS:
+            # build messages list
+            gpt_msgs = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.history
+                if m["role"] in ("user", "assistant")
+            ]
+            t0 = time.time()
+            resp = openai.chat.completions.create(
+                model=selected_gpt,
+                messages=gpt_msgs,
+                temperature=temp,
+                max_tokens=max_tokens,
+            )
+            text_gpt = resp.choices[0].message.content
+            st.markdown(text_gpt)
+            st.caption(f"⏱ GPT took {time.time() - t0:.2f}s")
+
+            # update & persist budget
+            tokens = resp.usage.total_tokens
+            st.session_state.budget_used += tokens * COST_PER_TOKEN_CENTS
+            with open(BUDGET_FILE, "w") as f:
+                json.dump(st.session_state.budget_used, f)
+
+            st.session_state.history.append({"role": "assistant", "content": text_gpt})
+        else:
+            st.warning("🚫 Cloud budget exhausted (10¢ spent)")
+            st.session_state.history.append({
+                "role": "assistant",
+                "content": "[Budget exhausted—cloud disabled]"
+            })
+
+    # — llama3.2 response (full context)
+    with col2:
+        st.subheader(f"🤖 {selected_local}")
+        t1 = time.time()
+        history_ctx = "\n".join(
+            f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}"
             for m in st.session_state.history
-            if m["role"] in ("user", "assistant")
-        ]
-        t0   = time.time()
-        resp = openai.chat.completions.create(
-            model=selected_gpt,
-            messages=gpt_msgs,
-            temperature=temp,
-            max_tokens=max_tokens,
-        )
-        text_gpt = resp.choices[0].message.content
-        st.markdown(text_gpt)
-        st.caption(f"⏱ GPT took {time.time() - t0:.2f}s")
-        tokens = resp.usage.total_tokens
-        st.session_state.budget_used += tokens * COST_PER_TOKEN_CENTS
-        with open(BUDGET_FILE, "w") as f:
-            json.dump(st.session_state.budget_used, f)
-        st.session_state.history.append({"role": "assistant", "content": text_gpt})
-    else:
-        st.warning("🚫 Cloud budget exhausted (10¢ spent)")
-        st.session_state.history.append({
-            "role":"assistant",
-            "content":"[Budget exhausted—cloud disabled]"
-        })
+        ) + "\nAssistant:"
 
-# — llama3.2 with full context
-with col2:
-    st.subheader(f"🤖 {selected_local}")
-    t1 = time.time()
-    history_ctx = "\n".join(
-        f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}"
-        for m in st.session_state.history
-    ) + "\nAssistant:"
-    proc = subprocess.run(
-        ["ollama","run",selected_local,"-"],
-        input=history_ctx,
-        text=True, capture_output=True, check=True,
-        encoding="utf-8", errors="replace"
-    )
-    text_llama = proc.stdout
-    st.code(text_llama)
-    st.caption(f"⏱ Llama took {time.time() - t1:.2f}s")
-    st.session_state.history.append({"role":"assistant_local","content":text_llama})
-    st.chat_message("assistant").write(text_llama)
+        proc = subprocess.run(
+            ["ollama", "run", selected_local, "-"],
+            input=history_ctx,
+            text=True, capture_output=True, check=True,
+            encoding="utf-8", errors="replace"
+        )
+        text_llama = proc.stdout
+        st.code(text_llama)
+        st.caption(f"⏱ Llama took {time.time() - t1:.2f}s")
+        st.session_state.history.append({"role": "assistant_local", "content": text_llama})
+        st.chat_message("assistant").write(text_llama)
 
 # — Footer — always visible
 st.markdown("---")
