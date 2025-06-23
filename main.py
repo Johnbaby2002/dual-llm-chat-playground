@@ -75,20 +75,19 @@ max_tokens = st.sidebar.slider("Max Tokens", 50, 3000, 256, step=50)
 enable_local = st.sidebar.checkbox("Enable local LLM", value=True)
 
 # Budget configuration (capped at €0.10)
-TOTAL_BUDGET_CENTS = 10  # cents\ nCOST_PER_TOKEN_CENTS = 0.003  # cost per token in cents
+TOTAL_BUDGET_CENTS = 10
+COST_PER_TOKEN_CENTS = 0.003
 BUDGET_FILE = "budget.json"
 
 # Initialize session state and load budget
-def init_state():
-    if "history" not in st.session_state:
-        st.session_state.history = []
-    if "budget_used" not in st.session_state:
-        try:
-            with open(BUDGET_FILE, "r") as f:
-                st.session_state.budget_used = float(json.load(f))
-        except FileNotFoundError:
-            st.session_state.budget_used = 0.0
-init_state()
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "budget_used" not in st.session_state:
+    try:
+        with open(BUDGET_FILE, "r") as f:
+            st.session_state.budget_used = float(json.load(f))
+    except FileNotFoundError:
+        st.session_state.budget_used = 0.0
 
 # Sidebar: show remaining budget
 remaining = max(TOTAL_BUDGET_CENTS - st.session_state.budget_used, 0)
@@ -97,17 +96,19 @@ st.sidebar.metric("Budget remaining (¢)", f"{remaining:.1f}")
 # App title
 st.title("Dual-LLM Chat Playground")
 
-# Display history
+# Display conversation history
 for msg in st.session_state.history:
     role = "user" if msg["role"] == "user" else "assistant"
     st.chat_message(role).write(msg["content"])
 
-# User input
+# Chat input
 user_input = st.chat_input("Type your message here...")
 
 if user_input:
+    # Record and show user message
     st.session_state.history.append({"role": "user", "content": user_input})
     st.chat_message("user").write(user_input)
+
     col1, col2 = st.columns(2)
 
     # GPT response
@@ -116,9 +117,10 @@ if user_input:
         if st.session_state.budget_used < TOTAL_BUDGET_CENTS:
             messages = [
                 {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.history if m["role"] in ("user","assistant")
+                for m in st.session_state.history
+                if m["role"] in ("user", "assistant")
             ]
-            start = time.time()
+            t0 = time.time()
             resp = openai.chat.completions.create(
                 model=selected_gpt,
                 messages=messages,
@@ -127,12 +129,12 @@ if user_input:
             )
             text_gpt = resp.choices[0].message.content
             st.markdown(text_gpt)
-            st.caption(f"Time: {time.time() - start:.2f}s")
+            st.caption(f"Time: {time.time() - t0:.2f}s")
             tokens = resp.usage.total_tokens
             st.session_state.budget_used += tokens * COST_PER_TOKEN_CENTS
             with open(BUDGET_FILE, "w") as f:
                 json.dump(st.session_state.budget_used, f)
-            st.session_state.history.append({"role":"assistant","content":text_gpt})
+            st.session_state.history.append({"role": "assistant", "content": text_gpt})
         else:
             st.warning("Cloud budget exhausted")
 
@@ -142,19 +144,22 @@ if user_input:
         if enable_local and shutil.which("ollama"):
             try:
                 ctx = "\n".join(
-                    f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}"
-                    for m in st.session_state.history
+                    f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}" for m in st.session_state.history
                 ) + "\nAssistant:"
                 t1 = time.time()
                 proc = subprocess.run(
-                    ["ollama","run",selected_local,"-"],
-                    input=ctx,text=True,capture_output=True,check=True,
-                    encoding="utf-8",errors="replace"
+                    ["ollama", "run", selected_local, "-"],
+                    input=ctx,
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
                 text_loc = proc.stdout
                 st.code(text_loc)
                 st.caption(f"Time: {time.time() - t1:.2f}s")
-                st.session_state.history.append({"role":"assistant_local","content":text_loc})
+                st.session_state.history.append({"role": "assistant_local", "content": text_loc})
                 st.chat_message("assistant").write(text_loc)
             except Exception as e:
                 st.error(f"Local LLM error: {e}")
