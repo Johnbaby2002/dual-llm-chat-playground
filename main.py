@@ -50,13 +50,19 @@ st.sidebar.button("Unlock admin", on_click=unlock_admin)
 
 # Admin-only clear history & budget
 def clear_all():
+    # Reset in-memory state
     st.session_state.history = []
     st.session_state.budget_used = 0.0
+    # Remove persisted budget file
     try:
         os.remove("budget.json")
     except FileNotFoundError:
         pass
-    st.experimental_rerun()
+    # Attempt to rerun for fresh UI; ignore if unavailable
+    try:
+        st.experimental_rerun()
+    except AttributeError:
+        pass
 
 if st.session_state.admin_unlocked:
     st.sidebar.button("Clear History & Budget", on_click=clear_all)
@@ -75,8 +81,8 @@ max_tokens = st.sidebar.slider("Max Tokens", 50, 3000, 256, step=50)
 enable_local = st.sidebar.checkbox("Enable local LLM", value=True)
 
 # Budget configuration (capped at €0.10)
-TOTAL_BUDGET_CENTS = 10
-COST_PER_TOKEN_CENTS = 0.003
+TOTAL_BUDGET_CENTS = 10  # cents
+COST_PER_TOKEN_CENTS = 0.003  # cost per token in cents
 BUDGET_FILE = "budget.json"
 
 # Initialize session state and load budget
